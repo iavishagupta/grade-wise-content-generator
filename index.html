@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Agent Pipeline · Generator & Reviewer</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<style>
+  :root {
+    --ink: #1b1f23;
+    --paper: #faf9f6;
+    --line: #e2ddd3;
+    --accent: #3b5f4f;   /* deep pine — "review/approve" feel */
+    --accent-2: #a8562e; /* clay — "generate/draft" feel */
+    --fail: #b03a2e;
+    --pass: #3b5f4f;
+    --muted: #74716b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 48px 24px 96px; }
+  h1 {
+    font-size: 2rem;
+    margin: 0 0 4px;
+    letter-spacing: -0.01em;
+  }
+  .sub {
+    color: var(--muted);
+    font-family: 'Courier New', monospace;
+    font-size: 0.85rem;
+    margin-bottom: 36px;
+    letter-spacing: 0.02em;
+  }
+  form {
+    display: flex;
+    gap: 12px;
+    align-items: flex-end;
+    padding: 20px;
+    border: 1px solid var(--line);
+    background: white;
+    margin-bottom: 36px;
+    flex-wrap: wrap;
+  }
+  label {
+    display: block;
+    font-family: 'Courier New', monospace;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+  input {
+    font-family: inherit;
+    font-size: 1rem;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    background: var(--paper);
+  }
+  input#grade { width: 80px; }
+  input#topic { width: 280px; }
+  button {
+    font-family: 'Courier New', monospace;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    background: var(--ink);
+    color: white;
+    border: none;
+    padding: 11px 22px;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.4; cursor: default; }
+  button:hover:not(:disabled) { background: var(--accent-2); }
+
+  .flow {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 32px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .flow-step {
+    flex: 1;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    color: var(--muted);
+    background: white;
+    text-align: center;
+    transition: all 0.2s;
+  }
+  .flow-step.active { border-color: var(--accent-2); color: var(--accent-2); background: #fdf6f1; }
+  .flow-step.done { border-color: var(--accent); color: var(--accent); background: #f2f6f4; }
+
+  .panel {
+    border: 1px solid var(--line);
+    background: white;
+    margin-bottom: 24px;
+  }
+  .panel-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--line);
+    background: #f4f2ed;
+  }
+  .panel-head .tag {
+    font-family: 'Courier New', monospace;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+  }
+  .panel-body { padding: 18px; }
+  .status-badge {
+    font-family: 'Courier New', monospace;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 3px 10px;
+    border-radius: 2px;
+  }
+  .status-pass { background: #eaf1ed; color: var(--pass); border: 1px solid var(--pass); }
+  .status-fail { background: #f7e9e7; color: var(--fail); border: 1px solid var(--fail); }
+
+  .mcq { margin-bottom: 14px; padding-bottom: 14px; border-bottom: 1px dashed var(--line); }
+  .mcq:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+  .mcq .q { font-weight: bold; margin-bottom: 6px; }
+  .mcq ul { margin: 0; padding-left: 20px; }
+  .mcq .answer { color: var(--accent); font-family: 'Courier New', monospace; font-size: 0.8rem; margin-top: 6px; }
+
+  .feedback-list { margin: 0; padding-left: 20px; }
+  .feedback-list li { margin-bottom: 6px; }
+
+  .empty { color: var(--muted); font-style: italic; }
+  .error { color: var(--fail); font-family: 'Courier New', monospace; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState } = React;
+
+const API_URL = "http://127.0.0.1:8000/generate";
+
+function StatusBadge({ status }) {
+  if (!status) return null;
+  return (
+    <span className={`status-badge ${status === "pass" ? "status-pass" : "status-fail"}`}>
+      {status}
+    </span>
+  );
+}
+
+function ContentPanel({ tag, title, content }) {
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <strong>{title}</strong>
+        <span className="tag">{tag}</span>
+      </div>
+      <div className="panel-body">
+        {!content && <p className="empty">Not yet generated.</p>}
+        {content && (
+          <>
+            <p>{content.explanation}</p>
+            {content.mcqs && content.mcqs.map((m, i) => (
+              <div className="mcq" key={i}>
+                <div className="q">{i + 1}. {m.question}</div>
+                <ul>
+                  {m.options.map((o, j) => <li key={j}>{o}</li>)}
+                </ul>
+                <div className="answer">answer: {m.answer}</div>
+              </div>
+            ))}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ReviewPanel({ tag, title, review }) {
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <strong>{title}</strong>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <StatusBadge status={review && review.status} />
+          <span className="tag">{tag}</span>
+        </div>
+      </div>
+      <div className="panel-body">
+        {!review && <p className="empty">Not yet reviewed.</p>}
+        {review && (
+          review.feedback && review.feedback.length > 0 ? (
+            <ul className="feedback-list">
+              {review.feedback.map((f, i) => <li key={i}>{f}</li>)}
+            </ul>
+          ) : <p className="empty">No issues noted.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [grade, setGrade] = useState(4);
+  const [topic, setTopic] = useState("Types of angles");
+  const [loading, setLoading] = useState(false);
+  const [stage, setStage] = useState(0); // 0 idle, 1 generating, 2 reviewing, 3 refining, 4 done
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    setStage(1);
+    try {
+      // simulate visible staging while the single backend call resolves
+      const req = fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ grade: Number(grade), topic }),
+      });
+      setTimeout(() => setStage(2), 500);
+      const res = await req;
+      if (!res.ok) throw new Error(`Server error: ${res.status}`);
+      const data = await res.json();
+      if (data.refined) setStage(3);
+      setResult(data);
+      setStage(4);
+    } catch (err) {
+      setError(err.message || "Something went wrong.");
+      setStage(0);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const steps = ["Generate", "Review", "Refine (if needed)"];
+  const stepActive = (i) => {
+    if (i === 0) return stage === 1 ? "active" : stage > 1 ? "done" : "";
+    if (i === 1) return stage === 2 ? "active" : stage > 2 ? "done" : "";
+    if (i === 2) return stage === 3 ? "active" : stage === 4 && result?.refined ? "done" : "";
+    return "";
+  };
+
+  return (
+    <div className="wrap">
+      <h1>Content Pipeline</h1>
+      <div className="sub">generator_agent → reviewer_agent → refine (max 1 pass)</div>
+
+      <form onSubmit={handleSubmit}>
+        <div>
+          <label htmlFor="grade">Grade</label>
+          <input id="grade" type="number" min="1" max="12" value={grade}
+                 onChange={(e) => setGrade(e.target.value)} />
+        </div>
+        <div>
+          <label htmlFor="topic">Topic</label>
+          <input id="topic" type="text" value={topic}
+                 onChange={(e) => setTopic(e.target.value)} />
+        </div>
+        <button type="submit" disabled={loading}>
+          {loading ? "Running..." : "Generate"}
+        </button>
+      </form>
+
+      {stage > 0 && (
+        <div className="flow">
+          {steps.map((s, i) => (
+            <div className={`flow-step ${stepActive(i)}`} key={i}>{s}</div>
+          ))}
+        </div>
+      )}
+
+      {error && <p className="error">{error}</p>}
+
+      {(loading || result) && (
+        <>
+          <ContentPanel tag="generator_agent · pass 1" title="Generator Output"
+                         content={result && result.draft} />
+          <ReviewPanel tag="reviewer_agent" title="Reviewer Feedback"
+                       review={result && result.review} />
+          {result && result.refined && (
+            <>
+              <ContentPanel tag="generator_agent · pass 2 (refined)" title="Refined Output"
+                             content={result.refined} />
+              <ReviewPanel tag="reviewer_agent · re-check" title="Reviewer Feedback (refined)"
+                           review={result.refined_review} />
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
