@@ -4,12 +4,12 @@
 ```bash
 cd backend
 pip install -r requirements.txt
-export ANTHROPIC_API_KEY=your_key_here
+export OPENAI_API_KEY=your_key_here
 uvicorn main:app --reload --port 8000
 ```
 
 ## Run frontend
-Just open `frontend/index.html` in a browser (no build step — React via CDN).
+Just open `index.html` in a browser (no build step — React via CDN).
 It calls `http://localhost:8000/generate`.
 
 ## Flow
